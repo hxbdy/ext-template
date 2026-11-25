@@ -2,7 +2,9 @@ name: Release
 
 # ブラウザ拡張 (Chrome / Edge / Firefox) の自動リリース。
 # manifest.json の version を上げて main (または master) に push すると、
-# v<version> のタグと GitHub Release (zip 添付) を自動作成する。
+# v<version> のタグと GitHub Release を自動作成し、
+# Chrome 用 / Edge 用 / Firefox 用 (<repo>-{chrome,edge,firefox}-v*.zip) の zip を添付する。
+# 各 zip の manifest は検査に通ったものだけがリリースされる。
 #
 # 他の拡張で使うとき:
 #   1. この .github/ フォルダをそのままコピーする
@@ -49,12 +51,36 @@ jobs:
         if: steps.check.outputs.exists == 'false'
         run: python3 .github/scripts/build_zip.py
 
+      # Chrome / Edge 用 zip に他ブラウザ用のキーが残っていないか確認 (残っていると警告・ストアで拒否)
+      - name: Check Chrome / Edge manifest
+        if: steps.check.outputs.exists == 'false'
+        run: |
+          for zip in dist/*-chrome-v*.zip dist/*-edge-v*.zip; do
+            unzip -p "$zip" manifest.json | jq -e '
+              (has("browser_specific_settings") | not) and
+              ((.background.scripts // null) == null or (.background.service_worker // null) == null)
+            ' > /dev/null || { echo "::error::$zip の manifest.json に Chrome/Edge 非対応のキーがあります"; exit 1; }
+            echo "OK: $zip"
+          done
+
+      # Firefox 用 zip を Mozilla 公式の linter で検査 (AMO 審査と同じ検査。警告も失敗扱い)
+      - name: Lint Firefox zip
+        if: steps.check.outputs.exists == 'false'
+        run: |
+          for zip in dist/*-firefox-v*.zip; do
+            [ -e "$zip" ] || continue
+            dir="$RUNNER_TEMP/firefox-lint"
+            rm -rf "$dir" && mkdir -p "$dir" && unzip -q "$zip" -d "$dir"
+            npx --yes web-ext@8 lint --source-dir "$dir" --warnings-as-errors
+          done
+
       - name: Create release
         if: steps.check.outputs.exists == 'false'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "v${{ steps.build.outputs.version }}" "${{ steps.build.outputs.zip }}" \
+          # zips は Chrome 用 / Edge 用 / Firefox 用の zip パス (空白区切り)
+          gh release create "v${{ steps.build.outputs.version }}" ${{ steps.build.outputs.zips }} \
             --title "v${{ steps.build.outputs.version }}" \
             --target "${{ github.sha }}" \
             --generate-notes

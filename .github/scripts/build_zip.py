@@ -2,6 +2,13 @@
 """ブラウザ拡張 (Chrome / Edge / Firefox) のリリース用zipを dist/ に作成する。
 
 どのリポジトリでも .github/ をコピーするだけで使える。
+
+リポジトリの manifest.json は3ブラウザ共通で書く (ローカルでどのブラウザにも直接読み込める)。
+ストアは他ブラウザ用のキーで警告/拒否することがあるため、zip ごとに manifest を変換する:
+- <repo>-chrome-v<version>.zip  : background.scripts と browser_specific_settings を削除
+- <repo>-edge-v<version>.zip    : 同上 (Edge のストアは MV3 で background.scripts があると拒否する)
+- <repo>-firefox-v<version>.zip : background.service_worker を削除
+  ※ Firefox 版は manifest.json に browser_specific_settings がある場合だけ作る
 manifest.json が直下にない場合は、環境変数 EXTENSION_DIR か第1引数でフォルダを指定する。
 
 zip に入れないもの:
@@ -40,6 +47,25 @@ def manifest_images(manifest: dict) -> set[str]:
         elif isinstance(icon, dict):
             refs.extend(icon.values())
     return {str(PurePosixPath(r.lstrip("/"))) for r in refs}
+
+
+def for_chromium(manifest: dict) -> dict:
+    """Chrome / Edge 用。Edge のストアは MV3 で background.scripts があると受け付けない。"""
+    m = json.loads(json.dumps(manifest))
+    m.pop("browser_specific_settings", None)
+    bg = m.get("background")
+    if isinstance(bg, dict) and "service_worker" in bg:
+        bg.pop("scripts", None)
+    return m
+
+
+def for_firefox(manifest: dict) -> dict:
+    """Firefox 用。Firefox は background.service_worker に対応していない。"""
+    m = json.loads(json.dumps(manifest))
+    bg = m.get("background")
+    if isinstance(bg, dict) and "scripts" in bg:
+        bg.pop("service_worker", None)
+    return m
 
 
 def main() -> None:
@@ -94,19 +120,29 @@ def main() -> None:
     # dist/ を各リポジトリの .gitignore に書かなくても git に入らないようにする
     (dist / ".gitignore").write_text("*\n", encoding="utf-8")
 
-    out = dist / f"{repo}-v{version}.zip"
-    with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as z:
-        for arc in sorted(files):
-            z.write(files[arc], arc)
+    targets = {"chrome": for_chromium(manifest), "edge": for_chromium(manifest)}
+    if "browser_specific_settings" in manifest:
+        targets["firefox"] = for_firefox(manifest)
 
-    rel = out.relative_to(root).as_posix()
-    print(f"Created {rel} ({len(files)} files):")
-    for arc in sorted(files):
-        print(f"  {arc}")
+    zips = []
+    for target, target_manifest in targets.items():
+        out = dist / f"{repo}-{target}-v{version}.zip"
+        with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as z:
+            for arc in sorted(files):
+                if arc == "manifest.json":
+                    z.writestr(arc, json.dumps(target_manifest, ensure_ascii=False, indent=2) + "\n")
+                else:
+                    z.write(files[arc], arc)
+
+        rel = out.relative_to(root).as_posix()
+        zips.append(rel)
+        print(f"Created {rel} ({len(files)} files):")
+        for arc in sorted(files):
+            print(f"  {arc}")
 
     if gh_out := os.environ.get("GITHUB_OUTPUT"):
         with open(gh_out, "a", encoding="utf-8") as fh:
-            fh.write(f"version={version}\nzip={rel}\n")
+            fh.write(f"version={version}\nzips={' '.join(zips)}\n")
 
 
 if __name__ == "__main__":
