@@ -1,0 +1,28 @@
+{
+  "manifest_version": 3,
+  "name": "My Extension",
+  "version": "0.1.0",
+  "description": "Describe what this extension does.",
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "my-extension@example",
+      "strict_min_version": "140.0",
+      "data_collection_permissions": {
+        "required": ["none"]
+      }
+    }
+  },
+  "action": {
+    "default_title": "My Extension",
+    "default_popup": "popup.html"
+  },
+  "background": {
+    "service_worker": "background.js",
+    "scripts": ["background.js"]
+  },
+  "content_scripts": [{
+    "matches": ["https://example.com/*"],
+    "run_at": "document_end",
+    "js": ["content.js"]
+  }]
+}

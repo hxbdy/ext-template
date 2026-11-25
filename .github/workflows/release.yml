@@ -1,0 +1,60 @@
+name: Release
+
+# ブラウザ拡張 (Chrome / Edge / Firefox) の自動リリース。
+# manifest.json の version を上げて main (または master) に push すると、
+# v<version> のタグと GitHub Release (zip 添付) を自動作成する。
+#
+# 他の拡張で使うとき:
+#   1. この .github/ フォルダをそのままコピーする
+#   2. manifest.json がリポジトリ直下にない場合だけ、下の EXTENSION_DIR を書き換える
+#   3. 未リリースの version を今すぐ出したいときは Actions タブから手動実行 (Run workflow)
+on:
+  push:
+    branches: [main, master]
+    paths: ["**/manifest.json"]
+  workflow_dispatch:
+
+env:
+  EXTENSION_DIR: .   # manifest.json があるフォルダ (例: src)
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    # テンプレートリポジトリ自身ではリリースしない (テンプレートから作ったリポジトリでのみ動く)
+    if: ${{ !github.event.repository.is_template }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Read version
+        id: meta
+        run: echo "version=$(jq -r .version "$EXTENSION_DIR/manifest.json")" >> "$GITHUB_OUTPUT"
+
+      - name: Check existing release
+        id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "v${{ steps.meta.outputs.version }}" > /dev/null 2>&1; then
+            echo "v${{ steps.meta.outputs.version }} は既にリリース済みのためスキップします"
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build zip
+        id: build
+        if: steps.check.outputs.exists == 'false'
+        run: python3 .github/scripts/build_zip.py
+
+      - name: Create release
+        if: steps.check.outputs.exists == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "v${{ steps.build.outputs.version }}" "${{ steps.build.outputs.zip }}" \
+            --title "v${{ steps.build.outputs.version }}" \
+            --target "${{ github.sha }}" \
+            --generate-notes
